@@ -1,0 +1,233 @@
+---
+title: "Accidents_Catalunya"
+author: "Oriol Martínez"
+date: "2024-01-15"
+output: html_document
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+# ACCIDENTS A CATALUNYA
+
+Per aquesta part II de la pràctica de visualització de dades hem treballat amb el conjunt de dades procedent de la web de dades obertes de Catalunya (<https://analisi.transparenciacatalunya.cat/>). En aquest cas el conjunt de dades conté informació sobre accidents a Catalunya.
+
+A més a més d'aquestes dades també es farà ús d'un conjunt de dades amb informació geoespacial (<https://analisi.transparenciacatalunya.cat/Urbanisme-infraestructures/Mapa-comarcal-de-Catalunya/r97w-2njr>) per generar alguna visualització.
+
+Amb aquest treball es pretén donar resposta a les preguntes que es van plantejar en la part I.
+
+## Les dades
+
+Comencem primer de tot carregant els fitxers.
+
+```{r, message=FALSE}
+library(readr)
+library(data.table)
+
+acciCat <- read_csv("accidents_transit_catalunya_14012024.csv")
+
+geoCat <- read_csv("limits_administratius_catalunya_09012024.csv")
+
+geoCat$NOMCOMAR <- iconv(geoCat$NOMCOMAR, to = "ASCII//TRANSLIT")
+
+acciCat$nomCom[acciCat$nomCom == "Val d'Aran"] <- "Aran"
+
+mun_llucanes <- toupper(c("Alpens","Lluca", "Olost", "Orista", "Perafita", "Prats de Llucanes", "Sant Agusti de Lluca", "Sant Bartomeu de Llucanes", "Sant Feliu Sasserra", "Sant Boi de Llucanes", "Sobremunt")) 
+
+setDT(acciCat)[nomMun %in% mun_llucanes, nomCom := "Llucanes"]
+```
+
+Hem hagut de modificar algunes dades per facilitar més endavant la combinació de dades a partir de la columna de comarques.
+
+Visualitzem una mica la informació que disposem de les dades.
+
+```{r}
+summary(acciCat)
+```
+
+```{r}
+summary(geoCat)
+```
+
+Un cop carregades les dades passem a generar les diferents visualitzacions.
+
+## 1 Com ha evolucionat el nombre de morts a Catalunya en els darrers 11 anys?
+
+Seleccionem les dades que ens interessen. En aquest cas voldrem disposar de les dades d'anys i el nombre de víctimes en els accidents (morts, ferits greus i ferits lleus)
+
+```{r, message=FALSE}
+acci1 <- acciCat[complete.cases(F_MORTS), c("Any", "F_MORTS", "F_FERITS_GREUS", "F_FERITS_LLEUS")]
+```
+
+```{r}
+mortsCat <- aggregate(cbind(F_MORTS, F_FERITS_GREUS, F_FERITS_LLEUS) ~ Any, acci1, FUN = sum)
+```
+
+```{r, message=FALSE}
+library(ggplot2)
+library(plotly)
+
+amC <- ggplot(data = mortsCat, aes(x = Any)) +
+  geom_line(aes(y = F_MORTS, colour = "Morts"), linewidth = 1) +
+  geom_line(aes(y = F_FERITS_GREUS, colour = "Ferits greus"), linewidth = 1) +
+  geom_line(aes(y = F_FERITS_LLEUS, colour = "Ferits lleus"), linewidth = 1) +
+  scale_colour_manual(values = c("Morts" = "red", "Ferits greus" = "orange", "Ferits lleus" = "green")) +
+  theme(plot.background = element_rect(fill = "white")) +
+  labs(x = "Any", y = "Victimes", colour = "Categoria", title = "Accidents a Catalunya", subtitle = "Evolució del nombre de víctimes totals i estat per any a Catalunya")
+
+ggplotly(amC) %>%
+  layout(hoverlabel = list(bgcolor = "white", font = list(color = "black")))
+```
+
+Per la primera visualització ens hem decantat per la representació lineal. Això és així perquè ens permetrà observar d'una manera més clara la tendència en els accidents a través dels anys. En aquest sentit podem veure que en totes les dades (morts i ferits) hi ha una tendència a la baixa. 
+
+Com hem representat tots els resultats alhora podem veure les diferències entre ells en un sol cop d'ull. A més a més la gràfica permet passar el cursor per sobre i observar les dades més detalladament. Així podem veure exactament el nombre de ferits greus el 2013 o fins i tot podem activar una opció que ens permet veure per al mateix any les dades de totes tres línies. 
+
+Una altra opció que disposa la visualització és que a partir de la llegenda també podem seleccionar quines dades veure. Podem fer clic sobre la que no ens interessi i aquesta desapareixerà de la gràfica. I també si volem una mica més de detall podríem fer zoom.
+
+
+## 2 Quins mesos acumulen més accidents?
+
+Per aquesta representació volem observar si hi ha algun mes en el qual hi ha un augment d'accidents. En aquest cas no es busca veure la quantitat de cada tipus d'accident sinó el recompte total.
+
+Per aquesta visualització s'ha considerat que la gràfica de barres serà una bona elecció.
+
+```{r, message=FALSE}
+library(lubridate)
+acci2 <- acciCat[complete.cases(acciCat$dat), c("dat")]
+acci2$dat <- dmy(acci2$dat)
+acci2$mes <- month(acci2$dat, label = TRUE)
+
+naC <- ggplot(acci2, aes(x = mes)) +
+  geom_bar(fill = "steelblue") +
+  theme_minimal() +
+  labs(x = "Mes", y = "Nombre accidents", title = "Nombre d'accidents per mes")
+
+ggplotly(naC)
+
+```
+
+Aquesta representació ens permet observar que la major quantitat d'accidents s'acumulen a l'estiu, en aquest cas més sobre el mes de Juliol. S'entén donat que a l'estiu la gent es desplaça més. 
+És curiós veure que els mesos on també s'espera un moviment elevat de gent seria al Desembre i Gener donat que són èpoques festives, però en canvi hi ha menys accidents.
+
+## 3 Hi ha alguna correlació entre el nombre de víctimes, la seva gravetat i el moment del dia de l'accident?
+
+Per a la següent representació s'ha plantejat en trobar si hi ha cap correlació entre el grau d'accident que pateix la víctima (mort, ferit greu, ferit lleu) i els dies o els moments del dia. En aquest sentit el raonament inical és pensar que hi pugui haver accidents més greus en dates senyaldes o caps de setmana.
+
+```{r}
+acci3 <- acciCat[, c("F_MORTS", "F_FERITS_GREUS", "F_FERITS_LLEUS", "grupDiaLab", "grupHor", "tipDia")]
+
+acci3 <- acci3[complete.cases(acci3),]
+
+```
+
+Ens interessa saber quins valors únics trobem en los columnes grupDiaLab, grupHor i tipDia ja que les modificarem per fer-les numèriques.
+
+```{r}
+unique(acci3$grupDiaLab)
+unique(acci3$grupHor)
+unique(acci3$tipDia)
+```
+
+```{r, message = FALSE}
+library(plyr)
+        
+gruphor <- c("Matí" = "1", "Tarda" = "2", "Nit" = "3")
+grupdialab <- c("Feiners" = "1", "CapDeSetmana" = "2")
+tipdia <- c("dill-dij" = "1", "div" = "2", "dis" = "3", "dg" = "4")
+
+acci3$grupHor <- as.numeric(revalue(acci3$grupHor, gruphor))
+acci3$grupDiaLab <- as.numeric(revalue(acci3$grupDiaLab, grupdialab))
+acci3$tipDia <- as.numeric(revalue(acci3$tipDia, tipdia))
+
+acci3corr <- cor(acci3)
+
+# Converteix la matriu de correlació en un dataframe per a ggplot
+df_correlacio <- reshape2::melt(acci3corr)
+
+# Crea el heatmap
+acci3hm <- ggplot(df_correlacio, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                       midpoint = 0, limit = c(-1,1), space = "Lab", 
+                       name="Correlació") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+                                   size = 12, hjust = 1)) +
+  coord_fixed() + 
+  ggtitle("Correlació entre gravetat accident i moment del dia")
+
+# Mostra el gràfic
+ggplotly(acci3hm)
+```
+
+Podem veure que hi ha una correlació negativa entre els ferits greus i els morts, i també observem que hi ha una correlació molt alta entre el tipus dia i el grup de dia laboral. De fet aquesta última correlació té molt sentit ja que la gran majoria de dies "dilluns-divendres" seran considerats "Feiners" exceptuant algun cas on fos festiu.
+
+Per la resta podem extreure que el tipus el resultat de la víctima en un accident no té correlació amb el moment del dia. Podríem observar en una gràfica que entre setmana hi hagi víctimes però això no vol dir que hi hagi una correlació entre elles.
+
+## 4 Quina és la comarca amb més víctimes (morts, ferits greus, ferits lleus) per any?
+
+En aquest cas el que volem és representar sobre un mapa quina és la comarca que més víctimes té. A més volem que aquest mapa estigui colorit pel tipus (mort, ferit greu, ferit lleu) i poder observar per cada any (2010 - 2021)
+
+```{r, message=FALSE}
+
+library(sf)
+library(dplyr)
+library(shiny)
+library(leaflet)
+
+mortsAnys <- aggregate(cbind(F_MORTS, F_FERITS_GREUS, F_FERITS_LLEUS)~ Any + nomCom, data = acciCat, FUN = sum)
+mortsAnys$nomCom <- iconv(mortsAnys$nomCom, to = 'ASCII//TRANSLIT')
+
+geomort <- merge(x = mortsAnys, y = geoCat, by.x = "nomCom", by.y = "NOMCOMAR", all.y = TRUE)
+geomort <- st_as_sf(geomort, wkt = "Georeferència")
+
+# Define UI for application
+ui <- fluidPage(
+  titlePanel("Mapa interactiu accidents a Catalunya"),
+  sidebarLayout(
+    sidebarPanel(
+      selectInput("variable", "Escull una variable:", choices = c("F_MORTS", "F_FERITS_GREUS", "F_FERITS_LLEUS")),
+      selectInput("Any", "Escull un Any:", choices = unique(geomort$Any))
+    ),
+    mainPanel(
+      leafletOutput("map")
+    )
+  )
+)
+
+server <- function(input, output) {
+  output$map <- renderLeaflet({
+    data <- geomort %>%
+      filter(Any == input$Any)
+    
+    
+    pal <- colorBin(rev(viridis::magma(7)), data[[input$variable]], bins = 7)
+                    
+    m <- leaflet() %>%
+      addTiles()
+    
+    m <- leaflet::addPolygons(map = m, 
+                              data = data, 
+                              fillColor = ~pal(data[[input$variable]]), 
+                              fillOpacity = 0.8, 
+                              color = "#BDBDC3", 
+                              weight = 1,
+                              label = ~paste(nomCom, ": ", data[[input$variable]]))
+    
+    m
+  })
+}
+
+shinyApp(ui = ui, server = server)
+
+```
+
+La visualització ens permet 3 coses:
+- La primera és que ens permet seleccionar quin tipus de víctima d'accident volem estudiar. Aquesta opció es podria modificar per afegir altres dades d'interès.
+- La segona és que permet també seleccionar l'any d'interès d'estudi (2010 - 2021)
+- La tercera és que un cop seleccionat el tipus de víctima i l'any podem explorar per comarques la quantitat de cada tipus de víctima passant el cursos per sobre. També és pot fer zoom però en aquest cas no hi ha cap altra opció extra per la qual el zoom ens aporti més informació.
+
+De la representació podem veure per exemple que Barcelona, en comparació amb la resta de Catalunya, és un punt negre en quant a accidents. També és interessant explorar altres anys com el 2020, en què la gent estava tancada a casa seva i el moviment era limitat, i observar a partir dels accidents en quines zones hi havia més moviment en una època on era poc habitual desplaçar-se.
